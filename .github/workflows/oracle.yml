@@ -76,6 +76,11 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install pyyaml==6.0.2
 
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        # JUCE's build-time helper tool (juceaide) needs freetype and fontconfig headers on Linux.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libfreetype-dev libfontconfig1-dev
+
       - name: Configure (fetches JUCE 9.0.4)
         run: >
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release

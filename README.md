@@ -17,7 +17,8 @@ outputs (JSON dumps, audio, images) with a hash manifest. SYRP's CI downloads th
 
 ## Build
 
-Requirements: CMake 3.22+, a C++20 compiler, git, Python 3.10+ (tests and scripts only).
+Requirements: CMake 3.22+, a C++20 compiler, git, Python 3.10+ (tests and scripts only), and on Linux
+the freetype and fontconfig development headers (see below).
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -32,9 +33,11 @@ pinned commit).
 
 The runner links `juce_core`, `juce_events`, `juce_data_structures` and `juce_cryptography` only. It is a
 headless console app: curl, web views and the splash screen are disabled, and no GUI, audio-device or
-graphics module is linked, so on Linux no ALSA, X11, GTK, WebKit or curl headers are needed. (JUCE's
-configure step probes for them and prints "not found"; that is harmless.) Kinds that render images will
-add `juce_graphics`, which needs freetype and fontconfig on Linux.
+graphics module is linked, so on Linux no ALSA, X11, GTK, WebKit or curl headers are needed (JUCE's
+configure step probes for them and prints "not found"; that is harmless). On Linux, JUCE's build-time
+helper tool (`juceaide`, built during configure) does need the freetype and fontconfig headers:
+`sudo apt-get install libfreetype-dev libfontconfig1-dev`. Kinds that render images will add
+`juce_graphics`, which needs the same two packages.
 
 ## Run
 
