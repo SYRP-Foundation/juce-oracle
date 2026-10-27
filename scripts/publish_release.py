@@ -4,7 +4,11 @@
 scenario-set hash (tag "scenarios-<hash>"), using the gh CLI.
 
 Input: a directory holding one juce-oracle output directory per platform (each with manifest.json).
-Assets uploaded (existing assets of the same name are replaced):
+Releases are immutable by default: when the release already exists, its manifest-<label>.json assets are
+compared with the new outputs. Identical outputs skip the upload; different outputs fail the job unless
+--replace is given (the workflow's replace_outputs input). The tarballs are not byte-reproducible, so
+only the manifests (scenario status and output hashes) are compared.
+Assets uploaded (only for a new release, or with --replace):
   juce-oracle-<label>.tar.gz   the whole output directory of one platform
   manifest-<label>.json        that platform's manifest, for downloading without unpacking
   cross-platform.json          which output files differ between platforms (ideally none)
@@ -65,12 +69,45 @@ def compare(platforms):
     }
 
 
+def fingerprint(manifest):
+    """What a manifest says about the outputs: per scenario id, its status and output hashes."""
+    return {
+        e["id"]: (e["status"], sorted((o["path"], o["sha256"]) for o in e["outputs"]))
+        for e in manifest["scenarios"]
+    }
+
+
+def compare_existing(existing_dir: Path, platforms):
+    """Compares existing manifest-<label>.json files with the new platforms.
+    Returns (identical, differences)."""
+    old = {}
+    for path in sorted(existing_dir.glob("manifest-*.json")):
+        old[path.name[len("manifest-"):-len(".json")]] = fingerprint(json.loads(path.read_text(encoding="utf-8")))
+    new = {label: fingerprint(manifest) for label, _, manifest in platforms}
+    differences = []
+    for label in sorted(set(old) | set(new)):
+        if label not in old:
+            differences.append(f"{label}: platform not in the existing release")
+        elif label not in new:
+            differences.append(f"{label}: platform missing from the new outputs")
+        else:
+            for sid in sorted(set(old[label]) | set(new[label])):
+                if old[label].get(sid) != new[label].get(sid):
+                    differences.append(f"{label}: {sid}")
+    return not differences, differences
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--artifacts", type=Path, required=True, help="directory of per-platform output dirs")
     ap.add_argument("--staging", type=Path, required=True, help="where release assets are written")
     ap.add_argument("--repo", help="owner/name for gh (default: current repository)")
     ap.add_argument("--target", help="commit the release tag points at")
+    ap.add_argument("--existing", type=Path,
+                    help="directory holding the existing release's manifest-<label>.json files "
+                         "(downloaded with gh when omitted and the release exists)")
+    ap.add_argument("--replace", action="store_true",
+                    help="replace an existing release whose outputs differ (default: fail)")
     ap.add_argument("--dry-run", action="store_true", help="write assets and print gh commands, run nothing")
     args = ap.parse_args()
 
@@ -123,12 +160,37 @@ def main() -> int:
     upload = ["gh", "release", "upload", tag, *repo, "--clobber", *[str(a) for a in assets]]
 
     print(f"tag: {tag}")
-    if args.dry_run:
+    existing = args.existing
+    if args.dry_run and existing is None:
         for cmd in (view, create, edit, upload):
             print("dry-run:", " ".join(cmd))
         return 0
 
-    exists = subprocess.run(view, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    exists = existing is not None
+    if existing is None:
+        exists = subprocess.run(view, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        if exists:
+            existing = args.staging / "existing"
+            existing.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["gh", "release", "download", tag, *repo, "--pattern", "manifest-*.json",
+                            "--dir", str(existing), "--clobber"], check=True)
+    if exists:
+        identical, differences = compare_existing(existing, platforms)
+        if identical:
+            print(f"release {tag} already has identical outputs: nothing to upload")
+            return 0
+        print(f"release {tag} exists with different outputs:", file=sys.stderr)
+        for d in differences:
+            print(f"  differs: {d}", file=sys.stderr)
+        if not args.replace:
+            print("refusing to overwrite; re-run the workflow with replace_outputs=true to replace them",
+                  file=sys.stderr)
+            return 1
+        print("--replace given: replacing the release assets")
+    if args.dry_run:
+        for cmd in ((edit, upload) if exists else (create, upload)):
+            print("dry-run:", " ".join(cmd))
+        return 0
     subprocess.run(edit if exists else create, check=True)
     subprocess.run(upload, check=True)
     return 0

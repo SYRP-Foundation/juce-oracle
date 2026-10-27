@@ -18,6 +18,10 @@ on:
         description: Publish the outputs as a release (main only)
         default: true
         type: boolean
+      replace_outputs:
+        description: Replace the outputs of an existing scenarios-<hash> release whose outputs differ (otherwise the publish job fails)
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -111,6 +115,9 @@ jobs:
             echo '```json'
             python -c "import json,sys; m=json.load(open(sys.argv[1])); print(json.dumps({'scenario_set': m['scenario_set'], 'summary': m['summary']}, indent=2))" "oracle-out/${{ matrix.label }}/manifest.json"
             echo '```'
+            echo
+            echo "Unsupported scenarios (no oracle kind yet):"
+            python -c "import json,sys; m=json.load(open(sys.argv[1])); print('\n'.join('- ' + e['id'] for e in m['scenarios'] if e['status']=='unsupported') or '- none')" "oracle-out/${{ matrix.label }}/manifest.json"
           } >> "$GITHUB_STEP_SUMMARY"
           exit $code
 
@@ -146,9 +153,12 @@ jobs:
       - name: Publish release scenarios-<scenario-set hash>
         env:
           GH_TOKEN: ${{ github.token }}
+          REPLACE_OUTPUTS: ${{ inputs.replace_outputs && '--replace' || '' }}
+        # Identical outputs: nothing is uploaded. Different outputs: fails unless replace_outputs is set.
         run: >
           python3 scripts/publish_release.py
           --artifacts artifacts
           --staging release-staging
           --repo "${{ github.repository }}"
           --target "${{ github.sha }}"
+          $REPLACE_OUTPUTS

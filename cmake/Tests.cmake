@@ -13,6 +13,7 @@ set(JUCE_ORACLE_TESTS
     b2_outputs_are_deterministic
     b2_unsupported_kind_is_reported
     b2_malformed_scenario_is_an_error
+    b2_out_of_range_integers_are_errors
     b2_refuses_non_empty_output_dir
     b2_syrp_scenarios_run
     b3_workflow_lint

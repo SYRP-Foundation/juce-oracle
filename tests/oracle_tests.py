@@ -166,6 +166,33 @@ def b2_malformed_scenario_is_an_error(c: Ctx):
     check(not (c.work / "escape").exists(), "unsafe id escaped the output directory")
 
 
+def b2_out_of_range_integers_are_errors(c: Ctx):
+    src = c.fresh("b2_range_src")
+    d = src / "state/value_tree/listener"
+    d.mkdir(parents=True)
+    wrap = 4294967297  # wraps to 1 if truncated to 32 bits, hiding a real change
+
+    def scenario(name, setup, steps):
+        (d / f"{name}.json").write_text(json.dumps({
+            "id": f"state/value_tree/listener/{name}", "setup": setup, "steps": steps,
+            "expect": {"compare": "set", "calls": []}}))
+
+    base = [{"op": "create", "tree": "a", "type": "A"},
+            {"op": "set_property", "tree": "a", "name": "x", "value": 1},
+            {"op": "add_listener", "tree": "a", "listener": "l"}]
+    scenario("big_value", base, [{"op": "set_property", "tree": "a", "name": "x", "value": wrap}])
+    scenario("big_index", [{"op": "create", "tree": "a", "type": "A"}, {"op": "create", "tree": "b", "type": "B"}],
+             [{"op": "add_child", "parent": "a", "child": "b", "index": wrap}])
+    scenario("edge_ok", base, [{"op": "set_property", "tree": "a", "name": "x", "value": 2147483647},
+                               {"op": "set_property", "tree": "a", "name": "x", "value": -2147483648}])
+    out = c.fresh("b2_range")
+    c.run("run-all", src, "--out", out, expect_code=1)
+    entries = by_id(json.loads((out / "manifest.json").read_text()))
+    check(entries["state/value_tree/listener/big_value"]["status"] == "error", f"{entries}")
+    check(entries["state/value_tree/listener/big_index"]["status"] == "error", f"{entries}")
+    check(entries["state/value_tree/listener/edge_ok"]["status"] in ("pass", "fail"), f"{entries}")
+
+
 def b2_refuses_non_empty_output_dir(c: Ctx):
     out = c.fresh("b2_nonempty")
     out.mkdir()
@@ -182,8 +209,14 @@ def b2_syrp_scenarios_run(c: Ctx):
     out = c.fresh("b2_syrp")
     c.run("run-all", c.scenarios, "--out", out)
     manifest = json.loads((out / "manifest.json").read_text())
-    bad = [e for e in manifest["scenarios"] if e["status"] not in ("pass", "fail")]
+    # New scenario families land in SYRP before the oracle has a kind for them: "unsupported" is
+    # allowed (and listed so the gap stays visible); "error" is still a failure.
+    bad = [e for e in manifest["scenarios"] if e["status"] not in ("pass", "fail", "unsupported")]
     check(not bad, f"scenarios that did not run: {bad}")
+    unsupported = sorted(e["id"] for e in manifest["scenarios"] if e["status"] == "unsupported")
+    print(f"{len(unsupported)} unsupported scenario(s):")
+    for sid in unsupported:
+        print(f"  unsupported: {sid}")
     problems = verify_output.verify(out, c.scenarios)
     check(not problems, "; ".join(problems))
     for e in manifest["scenarios"]:
@@ -220,6 +253,26 @@ def b3_release_dry_run(c: Ctx):
                                        "manifest-macos-arm64.json", "release.json"]), f"{release['assets']}")
     cross = json.loads((staging / "cross-platform.json").read_text())
     check(cross["identical"] and cross["outputs_compared"] == 4, f"{cross}")
+
+    # An existing release: identical manifests skip the upload; differing ones fail unless --replace.
+    existing = c.fresh("b3_existing")
+    existing.mkdir()
+    for label in ("linux-x64", "macos-arm64"):
+        shutil.copy(artifacts / label / "manifest.json", existing / f"manifest-{label}.json")
+    base = [sys.executable, str(ROOT / "scripts" / "publish_release.py"), "--artifacts", str(artifacts),
+            "--staging", str(staging), "--dry-run", "--existing", str(existing)]
+    p = subprocess.run(base, capture_output=True, text=True)
+    check(p.returncode == 0 and "nothing to upload" in p.stdout and "dry-run: gh release upload" not in p.stdout,
+          p.stdout + p.stderr)
+    changed = json.loads((existing / "manifest-linux-x64.json").read_text())
+    victim = next(e for e in changed["scenarios"] if e["outputs"])
+    victim["outputs"][0]["sha256"] = "f" * 64
+    (existing / "manifest-linux-x64.json").write_text(json.dumps(changed))
+    p = subprocess.run(base, capture_output=True, text=True)
+    check(p.returncode == 1 and "refusing to overwrite" in p.stderr and "differs: linux-x64" in p.stderr,
+          p.stdout + p.stderr)
+    p = subprocess.run(base + ["--replace"], capture_output=True, text=True)
+    check(p.returncode == 0 and "gh release upload" in p.stdout and "--clobber" in p.stdout, p.stdout + p.stderr)
 
     # Different scenario sets must not be published under one tag.
     shutil.rmtree(artifacts / "macos-arm64")

@@ -50,6 +50,12 @@ def main() -> int:
             problems.append("publish job does not call scripts/publish_release.py")
         if publish.get("permissions", {}).get("contents") != "write":
             problems.append("publish job needs contents: write")
+        if "--replace" not in publish_text:
+            problems.append("publish job must pass --replace only through the replace_outputs input")
+        if "replace_outputs" not in str(wf.get(True, wf.get("on", {}))):
+            problems.append("workflow_dispatch needs a replace_outputs input")
+        if "--clobber" in publish_text:
+            problems.append("publish job must not overwrite releases with --clobber")
         if "refs/heads/main" not in str(publish.get("if", "")):
             problems.append("publish job must run on main only")
 

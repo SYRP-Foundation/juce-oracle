@@ -8,6 +8,7 @@
 #include <juce_data_structures/juce_data_structures.h>
 
 #include <functional>
+#include <limits>
 #include <map>
 
 namespace oracle
@@ -141,7 +142,20 @@ private:
             fail ("op " + op["op"].toString() + ": missing integer field '" + key + "'");
             return 0;
         }
-        return static_cast<int> (v);
+        return narrowToInt (v, "op " + op["op"].toString() + ": field '" + key + "'", 0);
+    }
+
+    /** Integers are read as int; a value outside the int range is an error, never a wrapped value. */
+    int narrowToInt (const juce::var& v, const juce::String& what, int fallback)
+    {
+        const auto wide = static_cast<juce::int64> (v);
+        if (wide < static_cast<juce::int64> (std::numeric_limits<int>::min())
+            || wide > static_cast<juce::int64> (std::numeric_limits<int>::max()))
+        {
+            fail (what + ": integer " + juce::String (wide) + " is outside the supported 32-bit range");
+            return fallback;
+        }
+        return static_cast<int> (wide);
     }
 
     juce::ValueTree* tree (const juce::String& name)
@@ -162,7 +176,7 @@ private:
     juce::var value (const juce::var& v)
     {
         if (v.isInt64())
-            return static_cast<int> (v);
+            return narrowToInt (v, "set_property: value", 0);
         if (v.isInt() || v.isDouble() || v.isBool() || v.isString())
             return v;
 
