@@ -1,0 +1,149 @@
+# Builds juce-oracle against JUCE 9.0.4 on Linux, macOS and Windows, runs every SYRP parity scenario,
+# and (on main) publishes the outputs as a release tagged scenarios-<scenario-set hash>.
+# SPDX-License-Identifier: AGPL-3.0-only
+name: oracle
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *" # daily, to pick up new scenarios in SYRP
+  workflow_dispatch:
+    inputs:
+      syrp_ref:
+        description: SYRP branch, tag or commit whose parity/scenarios are run
+        default: main
+        type: string
+      publish:
+        description: Publish the outputs as a release (main only)
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  SYRP_REPOSITORY: SYRP-Foundation/SYRP
+  SYRP_REF: ${{ inputs.syrp_ref || 'main' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: build (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            label: linux-x64
+          - os: macos-14
+            label: macos-arm64
+          - os: windows-2022
+            label: windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Keep checkouts byte-exact
+        run: git config --global core.autocrlf false
+
+      - name: Check out juce-oracle
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out SYRP parity scenarios
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.SYRP_REPOSITORY }}
+          ref: ${{ env.SYRP_REF }}
+          path: syrp
+          # SYRP_READ_TOKEN: a read-only token for SYRP, needed only while SYRP is private.
+          token: ${{ secrets.SYRP_READ_TOKEN || github.token }}
+          sparse-checkout: parity/scenarios
+          persist-credentials: false
+
+      - name: Set up Python (test scripts)
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: python -m pip install pyyaml==6.0.2
+
+      - name: Configure (fetches JUCE 9.0.4)
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          "-DJUCE_ORACLE_SCENARIOS_DIR=${GITHUB_WORKSPACE}/syrp/parity/scenarios"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Install
+        run: cmake --install build --config Release --prefix dist
+
+      - name: Run every scenario
+        run: |
+          set +e
+          dist/bin/juce-oracle run-all syrp/parity/scenarios \
+            --out "oracle-out/${{ matrix.label }}" \
+            --label "${{ matrix.label }}" \
+            --oracle-commit "${{ github.sha }}"
+          code=$?
+          set -e
+          python scripts/verify_output.py "oracle-out/${{ matrix.label }}" --scenarios syrp/parity/scenarios
+          {
+            echo "### ${{ matrix.label }}"
+            echo
+            echo '```json'
+            python -c "import json,sys; m=json.load(open(sys.argv[1])); print(json.dumps({'scenario_set': m['scenario_set'], 'summary': m['summary']}, indent=2))" "oracle-out/${{ matrix.label }}/manifest.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $code
+
+      - name: Upload outputs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: oracle-${{ matrix.label }}
+          path: oracle-out/${{ matrix.label }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && inputs.publish))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out juce-oracle
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download outputs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: oracle-*
+          path: artifacts
+
+      - name: Publish release scenarios-<scenario-set hash>
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          python3 scripts/publish_release.py
+          --artifacts artifacts
+          --staging release-staging
+          --repo "${{ github.repository }}"
+          --target "${{ github.sha }}"

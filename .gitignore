@@ -1,0 +1,7 @@
+build/
+build-*/
+dist/
+oracle-out/
+artifacts/
+release-staging/
+__pycache__/
