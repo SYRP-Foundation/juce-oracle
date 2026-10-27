@@ -1,0 +1,29 @@
+{
+  "id": "state/value_tree/listener/fixture_ancestors_hear_property_changes",
+  "title": "Oracle fixture: a property set and removed on a child is heard on the child and its parent",
+  "juce_tag": "9.0.4",
+  "tolerance": "exact",
+  "ledger_rows": ["juce_data_structures/ValueTree"],
+  "docs": [],
+  "setup": [
+    { "op": "create", "tree": "top", "type": "Top" },
+    { "op": "create", "tree": "kid", "type": "Kid" },
+    { "op": "add_child", "parent": "top", "child": "kid", "index": -1 },
+    { "op": "add_listener", "tree": "top", "listener": "onTop" },
+    { "op": "add_listener", "tree": "kid", "listener": "onKid" }
+  ],
+  "steps": [
+    { "op": "set_property", "tree": "kid", "name": "gain", "value": 0.5 },
+    { "op": "remove_property", "tree": "kid", "name": "gain" },
+    { "op": "set_property", "tree": "top", "name": "label", "value": "hi" }
+  ],
+  "expect": {
+    "compare": "set",
+    "calls": [
+      { "listener": "onKid", "callback": "valueTreePropertyChanged", "tree": "kid", "property": "gain" },
+      { "listener": "onTop", "callback": "valueTreePropertyChanged", "tree": "kid", "property": "gain" },
+      { "listener": "onTop", "callback": "valueTreePropertyChanged", "tree": "top", "property": "label" }
+    ]
+  },
+  "record_order": true
+}

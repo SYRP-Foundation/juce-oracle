@@ -1,0 +1,25 @@
+{
+  "id": "state/value_tree/listener/fixture_expectation_mismatch",
+  "title": "Oracle fixture: an expectation that does not hold is reported as fail, with the observed calls",
+  "juce_tag": "9.0.4",
+  "tolerance": "exact",
+  "ledger_rows": ["juce_data_structures/ValueTree"],
+  "docs": [],
+  "setup": [
+    { "op": "create", "tree": "top", "type": "Top" },
+    { "op": "create", "tree": "kid", "type": "Kid" },
+    { "op": "add_child", "parent": "top", "child": "kid", "index": 0 },
+    { "op": "add_listener", "tree": "kid", "listener": "onKid" }
+  ],
+  "steps": [
+    { "op": "set_property", "tree": "top", "name": "x", "value": true }
+  ],
+  "expect": {
+    "compare": "sequence",
+    "calls": [
+      { "listener": "onKid", "callback": "valueTreePropertyChanged", "tree": "top", "property": "x" }
+    ]
+  },
+  "record_order": false,
+  "notes": "Deliberately wrong: a listener on a child does not hear its parent's properties. Used to test fail reporting."
+}

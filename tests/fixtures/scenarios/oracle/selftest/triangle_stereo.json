@@ -1,0 +1,8 @@
+{
+  "id": "oracle/selftest/triangle_stereo",
+  "title": "Harness self-test: a stereo triangle wave, written as WAV",
+  "sample_rate": 48000,
+  "samples": 64,
+  "channels": 2,
+  "period": 16
+}
